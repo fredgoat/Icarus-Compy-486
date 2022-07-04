@@ -1,0 +1,394 @@
+/* Welcome to Compy 486 - this script controls everything!  Shit this script does:
+Security - turn on alarms and lights and seal doors
+Report on energy, cargo, and gases
+Turn reactors and hydro engines on and off based on power
+Turn assemblers and refineries on and off based on power
+Turn gas generators on and off based on available gases
+
+To do:
+Incorporate manual on/off of gas generators
+*/
+
+IMyProgrammableBlock pewter;
+IMyTextSurface pewterScreen;
+IMyTextSurface powerScreen;
+IMyTextSurface invScreen;
+IMyTextSurface damScreen;
+
+/* Security Variables */
+int count = 0;
+int nextCount = 1;
+int alertStop = 0;
+int shipSize=-1; 
+int destroyed = 0; // how many have been destroyed so far?
+float destruction = 0; // what percent of blocks are destroyed?
+string Ship;
+IMyFunctionalBlock war;  // this is the Ship - Alert Timer
+IMyFunctionalBlock peace;  // this is the Ship - Safety Timer
+// these two require buttons to turn each one on, but do not require an off button
+List<IMyFunctionalBlock> Guards = new List<IMyFunctionalBlock>(); /* flashing lights and turrets that want to be turned on
+until repaired or manually deactivated */
+List<IMyDoor> Doors = new List<IMyDoor>();  // Doors to be closed once on initial damage
+List<IMySoundBlock> Intercom = new List<IMySoundBlock>();  //Speakers to turn on until repaired or deactivated, maybe 8 sec?
+string Status = "NOMINAL";
+List<IMyTerminalBlock> Blocks = new List<IMyTerminalBlock>();
+List<IMyTerminalBlock> Damaged = new List<IMyTerminalBlock>();
+float aveDeconstruction = 0; // not currently used
+float aveDamage = 0;
+float health = 0.5f;
+List<float> HealthList = new List<float>();
+float healthHigh = 0.98f; // For testing, Set to 0.9969 For use, Set to 0.98
+float healthMed = 0.9f; // For testing, Set to 0.9967 For use, Set to 0.9
+float healthLow = 0.7f; // For testing, Set to 0.9965 For use Set to 0.7
+IMyProjector repair;
+
+List<IMyFunctionalBlock> hydroEngines = new List<IMyFunctionalBlock>();
+List<IMyTerminalBlock> cargos = new List<IMyTerminalBlock>();
+List<IMyInventory> cargoInventories = new List<IMyInventory>();
+float maxCargoVol = 0;
+float currentCargoVol = 0;
+float percentCargoVol = 0;
+IMyPowerProducer reactor;
+List<IMyRefinery> refineries = new List<IMyRefinery>();
+List<IMyAssembler> assemblers = new List<IMyAssembler>();
+IMyAirVent bridgeVent;
+IMyAirVent coreVent;
+IMyAirVent lidoVent;
+IMyAirVent productionVent;
+float currentO2 = 0;
+float maxO2 = 0;
+float percentO2 = 0;
+float currentH2 = 0;
+float maxH2 = 0;
+float percentH2 = 0;
+List<IMyGasTank> oxyTanks = new List<IMyGasTank>();
+List<IMyGasTank> hydroTanks = new List<IMyGasTank>();
+List<IMyGasGenerator> gasGenerators = new List<IMyGasGenerator>();
+List<IMyBatteryBlock> batteries = new List<IMyBatteryBlock>();
+float currentEnergy;
+float maxEnergy;
+float percentEnergy;
+float batFlux;
+string batVerb;
+
+void DisableBlocks (List<IMyFunctionalBlock> _blocks) {
+    for (int i = 0; i < _blocks.Count; i++) {
+        _blocks[i].Enabled = false;
+    }
+}
+void EnableBlocks (List<IMyFunctionalBlock> _blocks) {
+    for (int i = 0; i < _blocks.Count; i++) {
+        _blocks[i].Enabled = true;
+    }
+}
+void Seal (List<IMyDoor> _doors) {
+    for (int i = 0; i < _doors.Count; i++) {
+        _doors[i].CloseDoor();
+    }
+}
+void Play (List<IMySoundBlock> _speakers) {
+    for (int i = 0; i < _speakers.Count; i++) {
+        _speakers[i].Play();
+    }
+}
+void Silence (List<IMySoundBlock> _speakers) {
+    for (int i = 0; i < _speakers.Count; i++) {
+        _speakers[i].Stop();
+    }
+}
+string CompartmentIntegrity (bool input) {
+    if (input) {
+        return "Sealed";
+    }
+    else return "Open";
+}
+
+string Wheel () {
+    if ( count%4 == 0 ) return "|";
+    if ( count%4 == 1 ) return "/";
+    if ( count%4 == 2 ) return "-";
+    if ( count%4 == 3 ) return "\\";
+    else return "\\";
+}
+
+void ListBlocks () {
+    List<IMyTerminalBlock>allBlocks = new List<IMyTerminalBlock>();
+    GridTerminalSystem.GetBlocksOfType<IMyTerminalBlock>(allBlocks);
+    for (int i = 0; i < allBlocks.Count; i++) {
+        if (allBlocks[i].CubeGrid.DisplayName == Ship) {
+            Blocks.Add(allBlocks[i]);
+        }
+   }
+}
+
+string DamageReport () {
+    string report = "";
+    for (int i = 0; i < Damaged.Count; i++) {
+        report += "\n" + Damaged[i].CustomName;
+    }
+    return report;
+}
+
+public Program()
+{
+    pewter = GridTerminalSystem.GetBlockWithName("Icarus - Compy 486") as IMyProgrammableBlock;
+    pewterScreen = pewter.GetSurface(0) as IMyTextSurface;
+    Ship = pewter.CubeGrid.DisplayName;
+    war = GridTerminalSystem.GetBlockWithName(Ship + " - Alert Timer") as IMyFunctionalBlock;
+    peace = GridTerminalSystem.GetBlockWithName(Ship + " - Safety Timer") as IMyFunctionalBlock;
+    powerScreen = GridTerminalSystem.GetBlockWithName(Ship + " - Power Display") as IMyTextSurface;
+    invScreen = GridTerminalSystem.GetBlockWithName(Ship + " - Inventory Display") as IMyTextSurface;
+    damScreen = GridTerminalSystem.GetBlockWithName(Ship + " - Damage Display") as IMyTextSurface;
+    GridTerminalSystem.GetBlockGroupWithName(Ship + " - Security Group").GetBlocksOfType<IMyFunctionalBlock>(Guards);
+    GridTerminalSystem.GetBlockGroupWithName(Ship + " - Airlock Doors").GetBlocksOfType<IMyDoor>(Doors);
+    GridTerminalSystem.GetBlockGroupWithName(Ship + " - Intercom").GetBlocksOfType<IMySoundBlock>(Intercom);
+    for (int i = 0; i < 10; i++) HealthList.Add(0.5f);
+//    GridTerminalSystem.GetBlocksOfType<IMyTerminalBlock>(Blocks);
+    ListBlocks();
+    Damaged.Clear();
+    destroyed = 0;
+    reactor = GridTerminalSystem.GetBlockWithName(Ship + " - Reactor") as IMyPowerProducer;
+    GridTerminalSystem.GetBlockGroupWithName(Ship + " - Main Cargo").GetBlocksOfType<IMyTerminalBlock>(cargos);
+    for (int i = 0; i < cargos.Count; i++)
+    {
+        cargoInventories.Add(cargos[i].GetInventory(0));
+    }
+    GridTerminalSystem.GetBlockGroupWithName(Ship + " - Refineries").GetBlocksOfType<IMyRefinery>(refineries);
+    GridTerminalSystem.GetBlockGroupWithName(Ship + " - Assemblers").GetBlocksOfType<IMyAssembler>(assemblers);
+    GridTerminalSystem.GetBlockGroupWithName(Ship + " - Hydrogen Engines").GetBlocksOfType<IMyFunctionalBlock>(hydroEngines);
+    GridTerminalSystem.GetBlockGroupWithName(Ship + " - Oxygen Tanks").GetBlocksOfType<IMyGasTank>(oxyTanks);
+    GridTerminalSystem.GetBlockGroupWithName(Ship + " - Hydrogen Tanks").GetBlocksOfType<IMyGasTank>(hydroTanks);
+    GridTerminalSystem.GetBlocksOfType<IMyGasGenerator>(gasGenerators);
+    GridTerminalSystem.GetBlocksOfType<IMyBatteryBlock>(batteries);
+    repair = GridTerminalSystem.GetBlockWithName(Ship + " - Repair Projector") as IMyProjector;
+    bridgeVent = GridTerminalSystem.GetBlockWithName(Ship + " - Air Vent: Bridge") as IMyAirVent;
+    coreVent = GridTerminalSystem.GetBlockWithName(Ship + " - Air Vent: Main Deck") as IMyAirVent;
+    lidoVent = GridTerminalSystem.GetBlockWithName(Ship + " - Air Vent: Lido 1") as IMyAirVent;
+    productionVent = GridTerminalSystem.GetBlockWithName(Ship + " - Air Vent: Production Port") as IMyAirVent;
+    Runtime.UpdateFrequency = UpdateFrequency.Update100;  //updates every 100 ms
+}
+
+public void Main(string argument, UpdateType updateSource)
+{
+/* Security */
+    nextCount = (count + 1) % 10;
+    if (shipSize==-1) {
+        shipSize = Blocks.Count;
+    }
+    else {
+        destroyed = shipSize - Blocks.Count;
+        destruction = (float)destroyed / shipSize;
+    }
+    for (int i = 0; i < Damaged.Count; i++) {
+        Damaged[i].ShowOnHUD = false;
+    }
+    Damaged.Clear();
+    float damage = 0;
+    float deconstruction = 0;  // not used
+    for (int i = 0; i < Blocks.Count; i++)  {
+        IMyTerminalBlock block = Blocks[i];
+        IMySlimBlock slimBlock = Blocks[i].CubeGrid.GetCubeBlock(Blocks[i].Position) as IMySlimBlock;
+        float blockDam = slimBlock.CurrentDamage / slimBlock.MaxIntegrity;
+        damage += blockDam;
+        if (blockDam > 0.01f) {
+            Damaged.Add(block);
+            block.ShowOnHUD = true;
+        }
+        deconstruction += slimBlock.DamageRatio - 1;  // not used
+    }
+    aveDamage = damage / Blocks.Count;
+    aveDeconstruction = deconstruction / Blocks.Count;  // not used
+    HealthList[nextCount] = health;
+    health = (1-destruction)*(1-aveDamage);  // formerly this also subtracted aveDeconstruction
+    if (health < HealthList[ nextCount ] || (war.Enabled == true && peace.Enabled == false)) {
+        /* if health has recently fallen OR War is on */
+        if (Guards[0].Enabled == false) {
+            Seal(Doors);  // Close doors if this is the first damage
+            Play(Intercom);  // Play that funky music
+            alertStop = count; // take a snapshot of count, which nextCount will have to arrive back at, to end the alert
+        }
+        EnableBlocks(Guards);  // Ensure guards are enabled while ship is being damaged
+        repair.Enabled = true;  // turn on the repair projector
+        peace.Enabled = false;
+    }
+    else if ((health > healthHigh && nextCount == alertStop && war.Enabled  == false) || peace.Enabled == true) {
+        /* if ship is repaired and we've cycled back to alertStop OR Peace is on */
+        if (peace.Enabled == true) destroyed = 0;
+        DisableBlocks(Guards);  // Guards are disabled if ship is repaired and nextCount has come back around to alertStop
+        repair.Enabled = false;  // turn off the repair projector
+        war.Enabled = false;                                                        /* reset alert buttons */
+        peace.Enabled = false;
+        Silence(Intercom);  //  Hold on, tuba
+        if (health > healthHigh) {
+            Status = "NOMINAL";
+        }
+    }
+    if (Guards[0].Enabled == true) {
+        if (healthMed < health && health <= healthHigh) Status = "MINOR DAMAGE DETECTED";
+        else if (healthLow < health && health <= healthMed) Status = "TAKING HEAVY DAMAGE";
+        else if (health <= healthLow) Status = "BULKHEADS FAILING";
+    }
+    else if (Guards[0].Enabled == false) {
+        if (healthMed < health && health <= healthHigh) Status = "MAINTENANCE NEEDED";
+        else if (healthLow < health && health <= healthMed) Status = "HULL COMPROMISED";
+        else if (health <= healthLow) Status = "HULL INTEGRITY CRITICAL";
+    }
+
+    currentEnergy = 0f;
+    maxEnergy = 0f;
+    batFlux = 0f;
+    maxO2 = 0f;
+    currentO2 = 0f;
+    maxH2 = 0f;
+    currentH2 = 0f;
+    maxCargoVol = 0f;
+    currentCargoVol = 0f;
+
+    for (int i=0; i<batteries.Count; i++)
+    {
+        currentEnergy += (float)batteries[i].CurrentStoredPower;
+        maxEnergy += (float)batteries[i].MaxStoredPower;
+        batFlux += batteries[i].CurrentInput - batteries[i].CurrentOutput + 0.425f;
+    }
+    percentEnergy = (float)Math.Round(currentEnergy*100/maxEnergy, 1);
+    currentEnergy = (float)Math.Round(currentEnergy, 1);
+
+    if (batFlux > 0) batVerb = "charging at ";
+    else batVerb = "draining by ";
+
+
+    for (int i=0; i<oxyTanks.Count; i++)
+    {
+        maxO2 += (float)oxyTanks[i].Capacity;
+        currentO2 += (float)(oxyTanks[i].Capacity * oxyTanks[i].FilledRatio);
+    }
+
+    for (int i=0; i<hydroTanks.Count; i++)
+    {
+        maxH2 += (float)hydroTanks[i].Capacity;
+        currentH2 += (float)(hydroTanks[i].Capacity * hydroTanks[i].FilledRatio);
+    }
+
+    for (int i=0; i<cargoInventories.Count; i++)
+    {
+        currentCargoVol += (float)cargoInventories[i].CurrentVolume;
+        maxCargoVol += (float)cargoInventories[i].MaxVolume;
+    }
+    percentCargoVol = (float)Math.Round((float)currentCargoVol*100/(float)maxCargoVol,1);
+
+    if (percentEnergy < 25)
+    {
+        reactor.Enabled = true;
+    }
+    if (percentEnergy > 30)
+    {
+        reactor.Enabled = false;
+    }
+
+    if (percentH2 >= percentO2 & percentH2 > percentEnergy + 10)
+    {
+        for (int i=0; i<hydroEngines.Count; i++)
+        {
+            hydroEngines[i].Enabled = true;
+    	   }
+    }
+    if (percentEnergy > 98 | percentEnergy > percentH2 + 10)
+    {
+        for (int i=0; i<hydroEngines.Count; i++)
+        {
+            hydroEngines[i].Enabled = false;
+    	   }
+    }
+
+    if (percentEnergy > 20)
+    {
+        for (int i=0; i<refineries.Count; i++)
+        {
+            refineries[i].Enabled = true;
+    	   }
+    }
+    if (percentEnergy < 10)
+    {
+        for (int i=0; i<refineries.Count; i++)
+        {
+            refineries[i].Enabled = false;
+    	   }
+    }
+    if (percentEnergy < 30)
+    {
+        for (int i=0; i<assemblers.Count; i++)
+        {
+            assemblers[i].Enabled = true;
+    	   }
+    }
+    if (percentEnergy < 20)
+    {
+        for (int i=0; i<assemblers.Count; i++)
+        {
+            assemblers[i].Enabled = false;
+    	   }
+    }
+
+
+    percentO2 = (float)Math.Round(currentO2*100/maxO2, 1);
+    currentO2 = (float)Math.Round(currentO2, 1);
+    percentH2 = (float)Math.Round(currentH2*100/maxH2, 1);
+    currentH2 = (float)Math.Round(currentH2, 1);
+
+    if (percentO2 > 0.75 & percentH2 > 0.75)
+    {
+        for (int i=0; i<gasGenerators.Count; i++)
+        {
+            gasGenerators[i].Enabled = false;
+    	   }
+    }
+    if (percentO2 < 0.1 | percentH2 < 0.1)
+    {
+        for (int i=0; i<gasGenerators.Count; i++)
+        {
+            gasGenerators[i].Enabled = true;
+    	   }
+    }
+
+
+    pewterScreen.ContentType = ContentType.TEXT_AND_IMAGE;  //  Computer Display
+    pewterScreen.FontSize = 1.75f;
+    pewterScreen.Alignment = VRage.Game.GUI.TextPanel.TextAlignment.LEFT;
+    pewterScreen.WriteText(Ship + " Status: " + Wheel() + "\n" + Status +
+"\nHull Integrity: " + Math.Round(health*100,1) + 
+"%\nCargo: " + percentCargoVol + 
+"% Full\nEnergy at " + percentEnergy +
+"%\nOxygen: " + percentO2 + "%", false);
+
+    powerScreen.ContentType = ContentType.TEXT_AND_IMAGE;  // Power Display
+    powerScreen.FontSize = 1.4f;
+    powerScreen.Alignment = VRage.Game.GUI.TextPanel.TextAlignment.LEFT;
+    powerScreen.WriteText(Ship + " Power: " + Wheel() + "\n----------------------------------------\nReactor Running: " +
+reactor.Enabled + "\nH2 Engines Running: " + hydroEngines[0].Enabled +
+"\n" + batteries.Count + " Batteries Available\n\nStored Energy: " + 
+Math.Round(currentEnergy*3.6,1) + " GJ\nEnergy Capacity: " + Math.Round(maxEnergy*3.6,1) +
+" GJ\n\nEnergy Storage at " + percentEnergy + "%\nBatteries " +
+batVerb + Math.Abs(Math.Round(batFlux,1)) + " MW", false);
+
+    invScreen.ContentType = ContentType.TEXT_AND_IMAGE;  // Inventory Display
+    invScreen.FontSize = 1.15f;
+    invScreen.Alignment = VRage.Game.GUI.TextPanel.TextAlignment.LEFT;
+    invScreen.WriteText(Ship + " Inventory: " + Wheel() + "\n----------------------------------------\nCargo: " + percentCargoVol + 
+"% Full\n\n" + "Gas Reserves:\n\nOxygen: " + percentO2 + "%\nHydrogen: " + 
+percentH2 + "%\nGas Generator Running: " + gasGenerators[0].Enabled
+ + "\n\nBridge Pressurization: " + Math.Round(bridgeVent.GetOxygenLevel()*100)
+ + "%\nBridge Compartment: " + CompartmentIntegrity(bridgeVent.CanPressurize)
+ + "\nCore Compartment: " + CompartmentIntegrity(coreVent.CanPressurize)
+ + "\nLido Compartment: " + CompartmentIntegrity(lidoVent.CanPressurize)
+ + "\nProduction Compartment: " + CompartmentIntegrity(productionVent.CanPressurize), false);
+
+    damScreen.ContentType = ContentType.TEXT_AND_IMAGE;  // Power Display
+    damScreen.FontSize = 1.15f;
+    damScreen.Alignment = VRage.Game.GUI.TextPanel.TextAlignment.LEFT;
+    damScreen.WriteText(Ship + " Status: " + Wheel() + "\n----------------------------------------\n" + Status + 
+"\n\nHull Integrity: " + Math.Round(health*100,1) + 
+"\nComponents Destroyed: " + destroyed + " out of " + shipSize
++ "\n\nComponents Damaged: " + DamageReport(), false);
+
+count = nextCount;
+}
